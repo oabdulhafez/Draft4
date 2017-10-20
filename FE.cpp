@@ -11,6 +11,7 @@
 #include <iostream>
 #include <pcl/io/io.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/io/ply_io.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/features/normal_3d.h>
@@ -29,6 +30,21 @@
 #include <Eigen/Dense>
 #include <vector>
 
+std::vector<Eigen::Matrix4d> read_transformations();
+
+int read_matrices_pose(std::map<int, Eigen::Matrix4d>& matrices);
+
+int read_velo_to_cam(Eigen::Affine3d &transform);
+
+void cylinder_segmentation (std::vector<Cylinder> &cylinders, 
+                  std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr > &clusters,
+                  Eigen::Matrix4d T);
+
+void UpdateMAP_saveFrame(std::vector<Cylinder> &cylinders, 
+						 std::vector<Frame> &frames, 
+						 std::vector<Landmark> &landmarks, 
+						 Eigen::Matrix4d T);
+
  pcl::visualization::PCLVisualizer visualize (pcl::visualization::PCLVisualizer viewer, 
                                                             std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr > &newClouds,
                                                             std::string cloud_initial_name,
@@ -38,7 +54,7 @@ using namespace pcl;
 using namespace std;
 
 // put true when you want to debug the code (pausing after each time step)
-bool debug=false;
+bool debug=true;
 
 
 struct thresholds
@@ -69,7 +85,10 @@ int num_frames;
 int initial_frame;
 istringstream (argv[1]) >> initial_frame;
 istringstream (argv[2]) >> num_frames;
-
+std::vector <Frame> frames;
+std::vector <Landmark> landmarks;
+std::vector <Cylinder> cylinders;
+std::vector<Eigen::Matrix4d> T= read_transformations();  
 
 // Set thresholds
 thresholds T = {
@@ -101,8 +120,8 @@ viewer.setCameraClipDistances(0.0792402, 79.2402);
 
 for (int a= initial_frame; a <= num_frames; a++)
 {
-/*
-		//-------------please comment this part if you do't want to debug the code-----------//
+
+		//-------------please comment this part if you don't want to debug the code-----------//
 		// configuring point cloud viewer
 		pcl::visualization::PCLVisualizer viewer("PCL Viewer");
 		viewer.setBackgroundColor( 0.0, 0.0, 0.0 );
@@ -111,7 +130,7 @@ for (int a= initial_frame; a <= num_frames; a++)
 		viewer.setCameraPosition(-21.1433, -23.4669, 12.7822,0.137915, -0.429331, -1.9301,0.316165, 0.28568, 0.904669);
 		viewer.setCameraClipDistances(0.0792402, 79.2402); 
 		//-----------------------------------------------------------------------------------//
-*/
+
   	// Create vaiables
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud          (new pcl::PointCloud<pcl::PointXYZ>), 
 										cloud_original (new pcl::PointCloud<pcl::PointXYZ>);
@@ -173,11 +192,11 @@ for (int a= initial_frame; a <= num_frames; a++)
 	viewer.addPointCloud <pcl::PointXYZ> (cloud_original, white_color, "cloud_original");
 
 	std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> clusters; // Vector of pointclouds pointers
-	std::stringstream cluterInd;
+	std::stringstream clusterInd;
 	int j=0, numClusters= 0, i;
 
 	// Loop over clusters
-	for (std::vector<pcl::PointIndices>::const_iterator it= cluster_indices.begin (); it != cluster_indices.end (); ++it,++j)
+	for (std::vector<pcl::PointIndices>::const_iterator it= cluster_indices.begin (); it != cluster_indices.end (); ++it)
 	{
 	    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_cluster (new pcl::PointCloud<pcl::PointXYZ>);
 
@@ -189,37 +208,35 @@ for (int a= initial_frame; a <= num_frames; a++)
 	    cloud_cluster->width = int (cloud_cluster->points.size ());
 	    cloud_cluster->height = 1;
 	    cloud_cluster->is_dense = true;
-	    clusters.push_back(cloud_cluster);
 
 	    // Compute parameter for the cluster
-	    cluterInd << j;
 	    meanX= meanY= meanZ= 0;
-	    for (i=0; i < (clusters[j]->points.size()); i++) // find type of object and find inbuilt function!!
+	    for (i=0; i < (cloud_cluster->points.size()); i++) // find type of object and find inbuilt function!!
 	    {
-			meanX= meanX + double(clusters[j]->points[i].x);
-			meanY= meanY + double(clusters[j]->points[i].y);
-			meanZ= meanZ + double(clusters[j]->points[i].z);
+			meanX= meanX + double(cloud_cluster->points[i].x);
+			meanY= meanY + double(cloud_cluster->points[i].y);
+			meanZ= meanZ + double(cloud_cluster->points[i].z);
 	    }
 
-	    meanX= meanX / double(clusters[j]->points.size());
-	    meanY= meanY / double(clusters[j]->points.size());
-	    meanZ= meanZ / double(clusters[j]->points.size());
+	    meanX= meanX / double(cloud_cluster->points.size());
+	    meanY= meanY / double(cloud_cluster->points.size());
+	    meanZ= meanZ / double(cloud_cluster->points.size());
 
 	    varX= varY= varZ=0;
-	    for (i=0; i < (clusters[j]->points.size()); i++)
+	    for (i=0; i < (cloud_cluster->points.size()); i++)
 	    {
-			varX= varX + pow( double(clusters[j]->points[i].x) - meanX, 2 );
-			varY= varY + pow( double(clusters[j]->points[i].y) - meanY, 2 );
-			varZ= varZ + pow( double(clusters[j]->points[i].z) - meanZ, 2 );
+			varX= varX + pow( double(cloud_cluster->points[i].x) - meanX, 2 );
+			varY= varY + pow( double(cloud_cluster->points[i].y) - meanY, 2 );
+			varZ= varZ + pow( double(cloud_cluster->points[i].z) - meanZ, 2 );
 	  	}
-	    varX= varX / double( clusters[j]->points.size() - 1 ); sdX= sqrt(varX);
-	    varY= varY / double( clusters[j]->points.size() - 1 ); sdY= sqrt(varY);
-	    varZ= varZ / double( clusters[j]->points.size() - 1 ); sdZ= sqrt(varZ);
+	    varX= varX / double( cloud_cluster->points.size() - 1 ); sdX= sqrt(varX);
+	    varY= varY / double( cloud_cluster->points.size() - 1 ); sdY= sqrt(varY);
+	    varZ= varZ / double( cloud_cluster->points.size() - 1 ); sdZ= sqrt(varZ);
 
 	    // Parameters of the cluster
 	    slendernessX= sdZ / sdX;
 	    slendernessY= sdZ / sdY;
-	    density= double( clusters[j]->points.size() ) / (27*sdX*sdY*sdZ);
+	    density= double( cloud_cluster->points.size() ) / (27*sdX*sdY*sdZ);
 
 	    if ( density > T.densityThreshold  		   &&  
 	    	 sdX < T.sdXYThreshold				   &&
@@ -228,10 +245,12 @@ for (int a= initial_frame; a <= num_frames; a++)
 	    	 slendernessY > T.slindernessThreshold )
 	    {
 		    numClusters++;
-
+		    ++j;
+		    clusterInd<<j;
+		    clusters.push_back(cloud_cluster);
 		    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> red_color (clusters[j], 255, 0, 0); 
-		    viewer.addPointCloud <pcl::PointXYZ> (clusters[j], red_color, "clusters["+ cluterInd.str()+"]");
-		    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "clusters["+ cluterInd.str()+"]");
+		    viewer.addPointCloud <pcl::PointXYZ> (clusters[j], red_color, "clusters["+ clusterInd.str()+"]");
+		    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "clusters["+ clusterInd.str()+"]");
 
 		    //Save cluster
 		    cout << "Cluster " << j << " ------> " << clusters[j]->points.size () << " points." << std::endl;
