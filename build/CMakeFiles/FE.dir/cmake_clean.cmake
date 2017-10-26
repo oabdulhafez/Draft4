@@ -1,5 +1,8 @@
 file(REMOVE_RECURSE
   "CMakeFiles/FE.dir/FE.cpp.o"
+  "CMakeFiles/FE.dir/cylinder_segmentation.cpp.o"
+  "CMakeFiles/FE.dir/read_matrices_pose.cpp.o"
+  "CMakeFiles/FE.dir/read_transformations.cpp.o"
   "FE.pdb"
   "FE"
 )

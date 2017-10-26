@@ -29,7 +29,17 @@ in the input variable "cylinders". */
 #include <Eigen/Dense>
 #include <vector>
 
+struct Cylinder
+{
+  pcl::ModelCoefficients::Ptr coefficients;
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
+  Eigen::Matrix<double, 5, 1> z_velo, z_nav;
 
+  Cylinder(); 
+};
+
+Cylinder::Cylinder()
+{}
 
 void cylinder_segmentation (std::vector<Cylinder> &cylinders, 
                   std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr > &clusters,
@@ -47,19 +57,19 @@ void cylinder_segmentation (std::vector<Cylinder> &cylinders,
   // Estimate point normals
   pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
   ne.setSearchMethod (tree);
-  ne.setRadiusSearch (p.normal_radius_search); // Use neighbors in a sphere of radius 3cm
+  ne.setRadiusSearch (0.4); // Use neighbors in a sphere of radius 3cm
   // ne.setKSearch (50); // 50
 
   // Create the segmentation object for cylinder segmentation and set all the parameters
   seg_cylinders.setOptimizeCoefficients (false);
   seg_cylinders.setModelType (pcl::SACMODEL_CYLINDER);
   seg_cylinders.setMethodType (pcl::SAC_RANSAC);
-  seg_cylinders.setNormalDistanceWeight (p.cylinder_normal_distance_weight); // 0.1
+  seg_cylinders.setNormalDistanceWeight (0.1); // 0.1
   seg_cylinders.setMaxIterations (10000);
   seg_cylinders.setDistanceThreshold (0.2); // 0.2
-  seg_cylinders.setRadiusLimits (0.05, p.cylinder_max_radius); // 0.1
+  seg_cylinders.setRadiusLimits (0.01, 0.2); // 0.1
   seg_cylinders.setAxis (Eigen::Vector3f (0.0, 0.0, 1.0));
-  seg_cylinders.setEpsAngle (pcl::deg2rad (17.0f));
+  seg_cylinders.setEpsAngle (pcl::deg2rad (10.0f));
 
   // Cylinder inliers and coefficients for each cluster 
 for (std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr >::iterator 
@@ -95,11 +105,11 @@ for (std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr >::iterator
       // std::cout << "Can't find the cylindrical component from cluster " 
       //           << std::distance(clusters.begin(), it) << std::endl;
     }
-    else if (cloud_cylinder->points.size() < p.min_cylinder_size) // too small cylinder
+    /*else if (cloud_cylinder->points.size() < 18) // too small cylinder
     {
       // cout<< "Cylinder from cluster "
       //          << std::distance(clusters.begin(), it) << " is too small"<< endl;
-    }
+    }*/
     else // Good cylinder -> store in cylinders
     {
       // Cylinder to push back

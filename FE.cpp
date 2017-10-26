@@ -30,9 +30,52 @@
 #include <Eigen/Dense>
 #include <vector>
 
-std::vector<Eigen::Matrix4d> read_transformations();
+namespace patch
+{
+    template < typename T > std::string to_string( const T& n )
+    {
+        std::ostringstream stm ;
+        stm << n ;
+        return stm.str() ;
+    }
+}
 
-int read_matrices_pose(std::map<int, Eigen::Matrix4d>& matrices);
+using namespace pcl;
+
+using namespace std;
+
+struct Cylinder
+{
+	pcl::ModelCoefficients::Ptr coefficients;
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
+	Eigen::Matrix<double, 5, 1> z_velo, z_nav;
+
+	Cylinder();	
+};
+
+struct Frame
+{
+	int numFeatures;
+	int numDetected;
+	int numExpected;
+	double repRate;
+
+	std::vector<int> association;
+
+	std::vector< Eigen::Matrix<double, 5, 1> > z_velo, z_nav;
+
+	Frame();
+};
+
+struct Landmark
+{
+	Eigen::Matrix<double, 5, 1> pose;
+	int  rep;
+	int  expected;
+	int expected_now;
+
+	Landmark();
+};
 
 int read_velo_to_cam(Eigen::Affine3d &transform);
 
@@ -43,15 +86,17 @@ void cylinder_segmentation (std::vector<Cylinder> &cylinders,
 void UpdateMAP_saveFrame(std::vector<Cylinder> &cylinders, 
 						 std::vector<Frame> &frames, 
 						 std::vector<Landmark> &landmarks, 
-						 Eigen::Matrix4d T);
+					 Eigen::Matrix4d T);
 
  pcl::visualization::PCLVisualizer visualize (pcl::visualization::PCLVisualizer viewer, 
                                                             std::map<int, pcl::PointCloud<pcl::PointXYZ>::Ptr > &newClouds,
                                                             std::string cloud_initial_name,
                                                             bool OPT_RED,
                                                             bool OPT_BIG_POINTS);
-using namespace pcl;
-using namespace std;
+
+ int read_matrices_pose(std::map<int, Eigen::Matrix4d>& matrices);
+
+ std::vector<Eigen::Matrix4d> read_transformations(void);
 
 // put true when you want to debug the code (pausing after each time step)
 bool debug=true;
@@ -74,9 +119,6 @@ struct parameters
 	  		limitZhigh;
 };
 
-
-
-
 // *********************  MAIN  ********************* //
 int main (int argc, char *argv[])
 {
@@ -88,20 +130,21 @@ istringstream (argv[2]) >> num_frames;
 std::vector <Frame> frames;
 std::vector <Landmark> landmarks;
 std::vector <Cylinder> cylinders;
-std::vector<Eigen::Matrix4d> T= read_transformations();  
+std::vector<Eigen::Matrix4d> T= read_transformations();
+std::string cloud_cylinder_id;
 
 // Set thresholds
-thresholds T = {
+thresholds R = {
 	200,  // densityThreshold
-	1.5,  // slendernessThreshold
-	0.25,   // sdXYThreshold
+	1.0,  // slendernessThreshold
+	0.3,   // sdXYThreshold
 };
 
 // Set parameters
 parameters P = {
 	  0.05,  // leafSize
-	  20,   // minClusterSize
-	  0.6,  // clusterTolerance
+	  10,   // minClusterSize
+	  0.5,  // clusterTolerance
 	  25,   // limitsXY
 	  -0.7, // limitZlow
 	  1    // limitZhigh
@@ -120,7 +163,7 @@ viewer.setCameraClipDistances(0.0792402, 79.2402);
 
 for (int a= initial_frame; a <= num_frames; a++)
 {
-
+	
 		//-------------please comment this part if you don't want to debug the code-----------//
 		// configuring point cloud viewer
 		pcl::visualization::PCLVisualizer viewer("PCL Viewer");
@@ -130,7 +173,7 @@ for (int a= initial_frame; a <= num_frames; a++)
 		viewer.setCameraPosition(-21.1433, -23.4669, 12.7822,0.137915, -0.429331, -1.9301,0.316165, 0.28568, 0.904669);
 		viewer.setCameraClipDistances(0.0792402, 79.2402); 
 		//-----------------------------------------------------------------------------------//
-
+	
   	// Create vaiables
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud          (new pcl::PointCloud<pcl::PointXYZ>), 
 										cloud_original (new pcl::PointCloud<pcl::PointXYZ>);
@@ -141,8 +184,8 @@ for (int a= initial_frame; a <= num_frames; a++)
 	std::stringstream sa;
 	sa << setw(6) << setfill('0') << a;
 	filename2= sa.str();
-	reader.read ("../Data/pcd-files/KITTI/" + filename2 + ".pcd", *cloud_original);
-
+	reader.read ("/media/osama/8822969D22969034/Ubuntu_Downloads/dataset/sequences/02/velodyne_pcd/" + filename2 + ".pcd", *cloud_original);
+///home/osama/Documents/Draft4/Data/pcd-files/KITTI/
 	// Voxels
 	pcl::VoxelGrid<pcl::PointXYZ> vg;
 	vg.setInputCloud (cloud_original);
@@ -176,6 +219,7 @@ for (int a= initial_frame; a <= num_frames; a++)
 	rorfilter.filter (*cloud);*/
 
 	// Extraction of clusters
+
 	pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
 	tree->setInputCloud (cloud);
 	std::vector<pcl::PointIndices> cluster_indices;
@@ -186,14 +230,9 @@ for (int a= initial_frame; a <= num_frames; a++)
 	ec.setInputCloud (cloud);
 	ec.extract (cluster_indices);
 
-	// Visualize all cloud - White cloud
-	viewer.removeAllPointClouds();
-	pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> white_color (cloud_original, 255, 255, 255);
-	viewer.addPointCloud <pcl::PointXYZ> (cloud_original, white_color, "cloud_original");
-
 	std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> clusters; // Vector of pointclouds pointers
 	std::stringstream clusterInd;
-	int j=0, numClusters= 0, i;
+	int j= 0, numClusters= 0, i, numCylinders= 0;
 
 	// Loop over clusters
 	for (std::vector<pcl::PointIndices>::const_iterator it= cluster_indices.begin (); it != cluster_indices.end (); ++it)
@@ -238,22 +277,23 @@ for (int a= initial_frame; a <= num_frames; a++)
 	    slendernessY= sdZ / sdY;
 	    density= double( cloud_cluster->points.size() ) / (27*sdX*sdY*sdZ);
 
-	    if ( density > T.densityThreshold  		   &&  
-	    	 sdX < T.sdXYThreshold				   &&
-	    	 sdY < T.sdXYThreshold				   &&
-	    	 slendernessX > T.slindernessThreshold &&  
-	    	 slendernessY > T.slindernessThreshold )
+	    if ( density > R.densityThreshold  		   &&  
+	    	 sdX < R.sdXYThreshold				   &&
+	    	 sdY < R.sdXYThreshold				   &&
+	    	 slendernessX > R.slindernessThreshold &&  
+	    	 slendernessY > R.slindernessThreshold )
 	    {
+
 		    numClusters++;
 		    ++j;
 		    clusterInd<<j;
 		    clusters.push_back(cloud_cluster);
-		    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> red_color (clusters[j], 255, 0, 0); 
-		    viewer.addPointCloud <pcl::PointXYZ> (clusters[j], red_color, "clusters["+ clusterInd.str()+"]");
-		    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "clusters["+ clusterInd.str()+"]");
+//		    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> red_color (clusters[j], 255, 0, 0);
+//		    viewer.addPointCloud <pcl::PointXYZ> (clusters[j], red_color, "clusters["+ clusterInd.str()+"]");
+//		    viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "clusters["+ clusterInd.str()+"]");
 
 		    //Save cluster
-		    cout << "Cluster " << j << " ------> " << clusters[j]->points.size () << " points." << std::endl;
+		    //cout << "Cluster " << j << " ------> " << clusters[j]->points.size () << " points." << std::endl;
 		    cout << "SD volume = " << sdX*sdY*sdZ << endl;
 		    cout << "density = " << density << endl;
 		    cout << "SD in X = " << sdX << endl;
@@ -264,8 +304,27 @@ for (int a= initial_frame; a <= num_frames; a++)
 
 	    }
 	} // End of loop over clusters
+
+			cylinders.clear();
+    		cylinder_segmentation( cylinders, clusters, T[a]); 
+    			// Visualize all cloud - White cloud
+			viewer.removeAllPointClouds();
+			pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> white_color (cloud_original, 255, 255, 255);
+			viewer.addPointCloud <pcl::PointXYZ> (cloud_original, white_color, "cloud_original");
+			// Update the cylinders
+    		for (std::vector< Cylinder >::iterator itt= cylinders.begin(); itt != cylinders.end(); ++itt)
+    		{
+    			numCylinders++;
+      			cloud_cylinder_id= "cloud_cylinder_" + patch::to_string( std::distance(cylinders.begin(), itt) );
+      			pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> red_color ( itt->cloud, 255, 0, 0);
+      			viewer.addPointCloud<pcl::PointXYZ> (itt->cloud, red_color, cloud_cylinder_id);
+      			viewer.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 10, cloud_cylinder_id);
+      			cout<< "ploting "<< cloud_cylinder_id<< " with #points "<< itt->cloud->points.size()<<  endl;
+    		}
 	cout<< "-----------------------------------"<< endl;
+	cout << "# cylinders = " << numCylinders << endl;
 	cout << "# clusters = " << numClusters << endl;
+	cout << "# epoch = " << a+1 << endl;
 	cout<< "-----------------------------------"<< endl;
 
 	// debugging point for completeness and correctness evaluation

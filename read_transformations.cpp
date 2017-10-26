@@ -10,6 +10,8 @@
 
 using namespace std;
 
+int read_matrices_pose(std::map<int, Eigen::Matrix4d>& matrices);
+
 vector<Eigen::Matrix4d> read_transformations()
 {
 	// read poses of the car (left camera pose)
